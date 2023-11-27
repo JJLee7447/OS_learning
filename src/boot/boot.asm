@@ -2,7 +2,7 @@
                                     ;------------------------------------------------------------
 %include "boot.inc"
 SECTION MBR vstart=0x7c00         
-    mov ax,cs      
+    mov ax,cs                       ; cs = 0
     mov ds,ax
     mov es,ax
     mov ss,ax
@@ -23,38 +23,44 @@ SECTION MBR vstart=0x7c00
                                     ;(CL,CH) = 窗口左上角的(X,Y)位置
                                     ;(DL,DH) = 窗口右下角的(X,Y)位置
                                     ;无返回值：
-    mov ax, 0600h
-    mov bx, 0700h
-    mov cx, 0                       ; 左上角: (0, 0)
-    mov dx, 184fh		            ; 右下角: (80,25),
-				                    ; 因为VGA文本模式中，一行只能容纳80个字符,共25行。
-				                    ; 下标从0开始，所以0x18=24,0x4f=79
-    int 10h                         ; int 10h
+;    mov ax, 0600h
+;    mov bx, 0700h
+;    mov cx, 0                       ; 左上角: (0, 0)
+;    mov dx, 184fh		            ; 右下角: (80,25),
+;				                    ; 因为VGA文本模式中，一行只能容纳80个字符,共25行。
+;				                    ; 下标从0开始，所以0x18=24,0x4f=79
+;    int 10h                         ; int 10h
 
                                     ; 输出字符串:MBR
-    mov byte [gs:0x00],'1'
-    mov byte [gs:0x01],0xA4
+;    mov byte [gs:0x00],'1'
+;    mov byte [gs:0x01],0xA4
+;
+;    mov byte [gs:0x02],' '
+;    mov byte [gs:0x03],0xA4
+;
+;    mov byte [gs:0x04],'M'
+;    mov byte [gs:0x05],0xA4	        ;A表示绿色背景闪烁，4表示前景色为红色
+;
+;    mov byte [gs:0x06],'B'
+;    mov byte [gs:0x07],0xA4
+;
+;    mov byte [gs:0x08],'R'
+;    mov byte [gs:0x09],0xA4
+                                    ; 设置屏幕模式为文本模式，清除屏幕
+    mov ax,3
+    int 0x10
 
-    mov byte [gs:0x02],' '
-    mov byte [gs:0x03],0xA4
-
-    mov byte [gs:0x04],'M'
-    mov byte [gs:0x05],0xA4	        ;A表示绿色背景闪烁，4表示前景色为红色
-
-    mov byte [gs:0x06],'B'
-    mov byte [gs:0x07],0xA4
-
-    mov byte [gs:0x08],'R'
-    mov byte [gs:0x09],0xA4
+    mov si, booting
+    call print
 	 
     mov eax,LOADER_START_SECTOR	    ; 起始扇区LBA模式地址 LBA地址长度为28
     mov bx,LOADER_BASE_ADDR         ; 写入的地址
-    mov cx,1			            ; 待读入的扇区数
+    mov cx,4			            ; 待读入的扇区数
     call rd_disk_m_16		        ; 以下读取程序的起始部分（一个扇区）
     
-    cmp word [0x900],0x55aa
-    jnz error
-    jmp LOADER_BASE_ADDR
+    cmp word [LOADER_BASE_ADDR],0x55aa         ; 判断是否为有效的引导扇区
+    jnz error                       ; 如果不是则跳转到error
+    jmp LOADER_BASE_ADDR            ; 跳转到loader
 
 print:
     mov ah,0x0e
@@ -67,13 +73,13 @@ print:
     jmp .next
 .done
     ret
-
+booting:
+    db "booting...",10,13,0
 error:
     mov si, .msg
     call print
     hlt ; 让cpu 停止
-    .msg db "Booting error !!!",10,13,0
-
+    .msg db "loading error !!!",10,13,0
                                     ;-------------------------------------------------------------------------------
                                     ;功能:读取硬盘n个扇区
 rd_disk_m_16:	   
@@ -139,6 +145,7 @@ rd_disk_m_16:
     add bx,2		  
     loop .go_on_read
     ret
+
 
     times 510-($-$$) db 0
     db 0x55,0xaa
