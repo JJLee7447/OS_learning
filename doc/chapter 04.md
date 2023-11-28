@@ -85,3 +85,147 @@ detect_memory:
     xchg bx,bx 
     loop .show
 ```
+
+
+## 保护模式
+
+### 8086 CPU 实模式
+
+8086 CPU 有 20 条地址线，可以寻址 1MB 的内存空间
+
+拥有1MB的寻址能力，怎样用 16 位的寄存器表示呢？
+
+这就引出了分段的概念，8086CPU将1MB存储空间分成许多逻辑段，每个段最大限长为64KB（但不一定就是64KB）。这样每个存储单元就可以用“段基地址+段内偏移地址”表示。这样就实现了从16位内部地址到20位实际地址的转换（映射）。段基地址由16位段寄存器值左移4位表达，段内偏移表示相对于某个段起始位置的偏移量。
+
+**段寄存器<<4 + 逻辑地址（16位）= 线性地址 = 物理地址**
+
+### 80386 CPU 保护模式
+
+80386 CPU 有 32 条地址线，可以寻址 4GB 的内存空间，但是为了兼容性考虑，保留了之前的段寄存器，必须支持实模式，还要支持保护模式。80386 增设两个寄存器 一个是全局性的段描述符表寄存器 GDTR(global descriptor table register)，一个是局部性的段描述符表寄存器 LDTR(local descriptor table register)。
+
+分别可以用来指向存储在内存中的一个段描述结构数组，或者称为段描述表。由于这两个寄存器是新增设的，不存在与原有的指令是否兼容的问题，访问这两个寄存器的专用指令便设计成“特权指令”"。
+
+保护模式通过“段选择符+段内偏移”寻址最终的线性地址或物理地址的。
+
+段选择符为16位，它不直接指向段，而是通过指向的段描述符，段描述符再定义段的信息。
+
+#### 全局描述符 
+
+80386-segment descriptor
+![](./images/段描述符格式.png)
+
+主要信息：
+- 内存的起始位置
+- 内存的长度 / 界限 = 长度 - 1
+- 内存属性
+
+```c
+typedef struct descriptor /* 共 8 个字节 */
+{
+    unsigned short limit_low;      // 段界限 0 ~ 15 位
+    unsigned int base_low : 24;    // 基地址 0 ~ 23 位 16M
+    unsigned char type : 4;        // 段类型
+    unsigned char segment : 1;     // 1 表示代码段或数据段，0 表示系统段
+    unsigned char DPL : 2;         // Descriptor Privilege Level 描述符特权等级 0 ~ 3
+    unsigned char present : 1;     // 存在位，1 在内存中，0 在磁盘上
+    unsigned char limit_high : 4;  // 段界限 16 ~ 19;
+    unsigned char available : 1;   // 该安排的都安排了，送给操作系统吧
+    unsigned char long_mode : 1;   // 64 位扩展标志
+    unsigned char big : 1;         // 32 位 还是 16 位;
+    unsigned char granularity : 1; // 粒度 4KB 或 1B
+    unsigned char base_high;       // 基地址 24 ~ 31 位
+} __attribute__((packed)) descriptor;
+```
+**Type** 字段
+
+| X | C/E | R/W | A |
+
+
+- A: Accessed 是否被 CPU 访问过
+- X: 1/代码 0/数据
+- X = 1：代码段
+    - C: 是否是依从代码段
+    - R: 是否可读
+- X = 0: 数据段
+    - E: 0 向上扩展 / 1 向下扩展
+    - W: 是否可写
+
+
+#### 全局描述符表 GDT (Global Descriptor Table)
+
+GDT 是一个数组，每个元素是一个段描述符，每个段描述符描述一个段，段的信息包括段的起始地址、段的大小、段的属性等。
+
+总共有 8192 个段描述符，每个段描述符 8 个字节，所以 GDT 的大小为 8192 * 8 = 65536 字节，也就是 64KB。
+```c
+descriptor gdt[8192];
+```
+
+GDT表第0个段描述符不可用。
+
+GDTR 寄存器：全局描述符表寄存器，用来存放 GDT 的起始地址和大小。
+
+##### 全局描述符指针
+
+全局描述符指针描述了**全局描述符表**的基地址和界限
+
+```c
+typedef struct pointer
+{
+    unsigned short limit; // size - 1
+    unsigned int base;
+} __attribute__((packed)) pointer;
+```
+使用：
+```s
+lgdt [gdt_ptr]; 加载 gdt
+sgdt [gdt_ptr]; 保存 gdt
+```
+
+全局描述符指针描述了**全局描述符表**的基地址和界限
+
+#### 段选择子
+
+段选择子用于指定段描述符在 GDT 中的位置，段选择子是一个 16 位的寄存器，它的结构如下图所示：
+
+
+![](./images/选择子结构.png)
+```c
+typedef struct selector
+{
+    unsigned char RPL : 2; // Request PL 
+    unsigned char TI : 1; // 0  全局描述符 1 局部描述符 LDT Local 
+    unsigned short index : 13; // 全局描述符表索引
+} __attribute__((packed)) selector;
+```
+
+### A20 线
+
+A20 线是 80386 CPU 的一个地址线，它的作用是控制 CPU 对内存的访问范围，当 A20 线为高电平时，CPU 可以访问 1MB 以上的内存，当 A20 线为低电平时，CPU 只能访问 1MB 以下的内存。
+
+所以在保护模式下，必须将 A20 线设置为高电平，否则 CPU 将无法访问 1MB 以上的内存。
+
+开启方式：
+
+```s
+in al, 0x92
+or al, 0b0010
+out 0x92, al
+```
+
+### 启动保护模式
+
+cr0 寄存器 0 位 置为 1
+```asm
+mov eax, cr0
+or eax, 1
+mov cr0, eax
+```
+
+## 在 loader 中开启保护模式
+
+编写思路：
+
+- 1. 初始化 GDT
+- 2. 初始化 GDTR
+- 3. 开启保护模式
+
