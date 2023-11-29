@@ -32,7 +32,7 @@ detect_memory:
 
     mov si,detecting
     call print
-
+    xchg bx,bx                      ; bochs 魔数断点
     jmp prepare_protect_mode
 
 
@@ -104,7 +104,7 @@ protect_mode:
     mov byte [0xb8000],'P'         ; 在屏幕上输出字符 'P' 用于测试
 
     mov byte [0x200000], 'J'        ; 在内存上输出字符 'J' 用于测试
-
+    xchg bx,bx                      ; bochs 魔数断点
     jmp $                           ; 通过死循环使程序悬停在此
 
 
@@ -113,7 +113,9 @@ code_selector equ (1 << 3) | 0      ; 代码段选择子
 data_selector equ (2 << 3) | 0      ; 数据段选择子
 
                                     ; 内存开始的基址 0x00
-                                    ; 内存界限 (4G / 4k -1 )
+                                    ; 内存界限 ((4G / 4k ) -1 )
+                                    ; 这个表达式的含义是将整个4GB的物理内存划分为4KB的页，
+                                    ; 然后从中减去1，以确保 Memory_Limit 表示的是最大合法地址。
 Memory_Base equ 0
 Memory_Limit equ ((1024* 1024* 1024* 4 ) / (1024 *4)) - 1
 
@@ -128,13 +130,13 @@ gdt_ptr:
                                     ; 第一个描述符必须为 0 (8bytes)
 gdt_base:
     dd 0,0                          
-
+                                    ; 代码段与数据段共享同一个内存区域
                                     ; 定义代码段描述符
 gdt_code:
     dw Memory_Limit & 0xffff        ; 段界限 0~15 位
     dw Memory_Base & 0xffff         ; 段基址 0~15 位 
     db (Memory_Base >> 16 )& 0xff   ; 段基址 16~23 位
-                                    ; P(1) DPL(00) S(1) Type(1010) A(1)
+                                    ; P(1) DPL(00) S(1) Type(1010) 代码 - 非依从 - 可读 - 没有被访问过 
     db 0b_1_00_1_1_0_1_0              
                                     ; G(1) D(1) 0(1) AVL(0) Limit(16 ~ 19)
     db 0b1_1_0_0_0000 | (Memory_Limit>>16 )& 0x0f
@@ -146,7 +148,7 @@ gdt_data:
     dw Memory_Limit & 0xffff        ; 段界限 0~15 位
     dw Memory_Base & 0xffff         ; 段基址 0~15 位 
     db (Memory_Base >> 16 )& 0xff   ; 段基址 16~23 位
-                                    ; P(1) DPL(00) S(1) Type(0010) A(1)
+                                    ; P(1) DPL(00) S(1) Type(0010) 数据 - 向下扩展- 可读 - 没有被访问过 
     db 0b_1_00_1_0_0_1_0              
                                     ; G(1) D(1) 0(1) AVL(0) Limit(16 ~ 19)
     db 0b1_1_0_0_0000 | (Memory_Limit>>16 )& 0x0f
