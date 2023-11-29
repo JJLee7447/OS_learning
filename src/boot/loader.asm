@@ -32,7 +32,7 @@ detect_memory:
 
     mov si,detecting
     call print
-    xchg bx,bx                      ; bochs 魔数断点
+
     jmp prepare_protect_mode
 
 
@@ -78,6 +78,8 @@ loading:
 detecting:
     db "Detecting Memory Success...",10,13,0
 
+loading_kernel:
+    db "Loading Kernel...",10,13,0
 error:
     mov si,.error_msg
     call print
@@ -87,10 +89,11 @@ error:
     .error_msg db "Loading Jinix Error !!!",10,13,0
 
 
+ 
+
 
 [bits 32]                            ; 进入保护模式
 protect_mode:
-    xchg bx,bx                      ; bochs 魔数断点 
                                     ; 初始化段寄存器
     mov ax,data_selector            ; 设置数据段选择子
     mov ds,ax                       ; 将数据段选择子写入 ds
@@ -101,16 +104,160 @@ protect_mode:
 
     mov esp,0x10000                 ; 设置栈顶指针
 
-    mov byte [0xb8000],'P'         ; 在屏幕上输出字符 'P' 用于测试
 
-    mov byte [0x200000], 'J'        ; 在内存上输出字符 'J' 用于测试
+    mov edi, 0x10000                ; 读取的目标内存
+    mov ecx, 10                     ; 起始扇区
+    mov bl, 200                     ; 扇区数量
     xchg bx,bx                      ; bochs 魔数断点
-    jmp $                           ; 通过死循环使程序悬停在此
+    call read_disk
 
+    xchg bx,bx                      ; bochs 魔数断点
+    xor ax,ax
+    jmp code_selector:0x10000       ; 跳转到内核入口地址
+    ud2                             ; 未定义指令，表示出错
+rd_disk_m_16:	   
+                                    ;-------------------------------------------------------------------------------
+				                    ; eax=LBA扇区号
+				                    ; ebx=将数据写入的内存地址
+				                    ; ecx=读入的扇区数
+    mov esi,eax	                    ;备份eax
+    mov di,cx		                ;备份cx
+                                    ;读写硬盘:
+                                    ;第1步：选择特定通道的寄存器(sector count)，设置要读取的扇区数 (1)
+    mov dx,0x1f2                    ;见 primary 通道设置为 0x1f2 选择的是sector count 寄存器
+    mov al,cl                       ; cl = 1
+    out dx,al                       ;读取的扇区数
+
+    mov eax,esi	                    ;恢复exa 即 loader 存放扇区的地址( 0x900) 
+
+                                    ;第2步：在特定通道寄存器中放入要读取扇区的地址(0x900)，将LBA地址存入0x1f3 ~ 0x1f6
+                                    ;LBA地址7~0位写入端口0x1f3
+    mov dx,0x1f3                       
+    out dx,al                          
+
+                                    ;LBA地址15~8位写入端口0x1f4
+    mov cl,8                        
+    shr eax,cl                      ; shr 将exa右移 cl(8) 位, 
+    mov dx,0x1f4
+    out dx,al
+
+                                    ;LBA地址23~16位写入端口0x1f5
+    shr eax,cl
+    mov dx,0x1f5
+    out dx,al
+                                    ;设置device寄存器的值，LBA地址的24 ~ 27位放入device 的低四位，高四位设置为1110
+    shr eax,cl
+    and al,0x0f	                    ;LBA第24~27位 LBA 地址长度28 所以这里只有低四位有意义 
+    or al,0xe0	                    ;设置7～4位为1110,表示LBA模式且选择主盘
+    mov dx,0x1f6
+    out dx,al
+
+                                    ;第3步：向0x1f7端口写入 读命令(0x20) 
+    mov dx,0x1f7
+    mov al,0x20                        
+    out dx,al
+
+                                    ;第4步：检测硬盘状态
+.not_ready:
+                                    ;同一端口，写时表示写入命令字，读时表示读入硬盘状态
+    nop
+    in al,dx
+    and al,0x88	                    ;第4位为1表示硬盘控制器已准备好数据传输，第7位为1表示硬盘忙
+    cmp al,0x08
+    jnz .not_ready	                ;若未准备好，继续等。
+
+                                    ;第5步：从0x1f0端口读数据
+    mov ax, di                      ;di当中存储的是要读取的扇区数(1)
+    mov dx, 256                     ;每个扇区512字节，一次读取两个字节，所以一个扇区就要读取256次，与扇区数相乘，就等得到总读取次数
+    mul dx                          ;8位乘法与16位乘法知识查看书p133,注意：16位乘法会改变dx的值！！！！
+    mov cx, ax	                    ; 得到了要读取的总次数，然后将这个数字放入cx中
+    mov dx, 0x1f0                   ;设置读端口寄存器
+.go_on_read:
+    in ax,dx
+    mov [ds:bx],ax
+    add bx,2		  
+    loop .go_on_read
+    ret
+
+
+
+read_disk:
+                                    ; -------------------------------------------
+                                    ; 读取硬盘
+                                    ; mov edi, 0x1000; 读取的目标内存
+                                    ; mov ecx, 2; 起始扇区
+                                    ; mov bl, 4; 扇区数量
+    ; 设置读写扇区的数量
+    mov dx, 0x1f2
+    mov al, bl
+    out dx, al
+
+    inc dx; 0x1f3
+    mov al, cl; 起始扇区的前八位
+    out dx, al
+
+    inc dx; 0x1f4
+    shr ecx, 8
+    mov al, cl; 起始扇区的中八位
+    out dx, al
+
+    inc dx; 0x1f5
+    shr ecx, 8
+    mov al, cl; 起始扇区的高八位
+    out dx, al
+
+    inc dx; 0x1f6
+    shr ecx, 8
+    and cl, 0b1111; 将高四位置为 0
+
+    mov al, 0b1110_0000;
+    or al, cl
+    out dx, al; 主盘 - LBA 模式
+
+    inc dx; 0x1f7
+    mov al, 0x20; 读硬盘
+    out dx, al
+
+    xor ecx, ecx; 将 ecx 清空
+    mov cl, bl; 得到读写扇区的数量
+
+    .read:
+        push cx; 保存 cx
+        call .waits; 等待数据准备完毕
+        call .reads; 读取一个扇区
+        pop cx; 恢复 cx
+        loop .read
+
+    ret
+
+    .waits:
+        mov dx, 0x1f7
+        .check:
+            in al, dx
+            jmp $+2; nop 直接跳转到下一行
+            jmp $+2; 一点点延迟
+            jmp $+2
+            and al, 0b1000_1000
+            cmp al, 0b0000_1000
+            jnz .check
+        ret
+
+    .reads:
+        mov dx, 0x1f0
+        mov cx, 256; 一个扇区 256 字
+        .readw:
+            in ax, dx
+            jmp $+2; 一点点延迟
+            jmp $+2
+            jmp $+2
+            mov [edi], ax
+            add edi, 2
+            loop .readw
+        ret
 
                                     ;数据准备包括 GPT gpt_ptr selector
-code_selector equ (1 << 3) | 0      ; 代码段选择子
-data_selector equ (2 << 3) | 0      ; 数据段选择子
+code_selector equ (1 << 3) | 0      ; 代码段选择子 0000 0000 0000 1000 (RPL = 0) (TI = 0) (index = 1)
+data_selector equ (2 << 3) | 0      ; 数据段选择子 0000 0000 0001 0000 (RPL = 0) (TI = 0) (index = 2)
 
                                     ; 内存开始的基址 0x00
                                     ; 内存界限 ((4G / 4k ) -1 )

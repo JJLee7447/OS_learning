@@ -229,3 +229,110 @@ mov cr0, eax
 - 2. 初始化 GDTR
 - 3. 开启保护模式
 
+## 从 loader 到 kernel加载进内存
+
+与MBR加载loader进内存类似，只是需要注意的是 kernel 的大小更大，需要多次读取扇区。
+
+修改目录结构 makefile .bochsrc
+
+目录结构：
+```bash
+--- build
+    |--- boot
+    |--- kernel
+    |--- system.bin
+    |--- system.map
+    |--- master.img
+--- src
+    |--- boot
+        --- boot.asm
+        --- loader.asm
+    |--- kernel
+        --- start.asm
+    |--- makefile
+```
+/src/makefile
+```bash
+BUILD:=../build
+SRC:=.
+ENTRYPOINT:=0x10000
+
+.PHONY:bochs clean
+
+bochs:$(BUILD)/master.img
+	bochs -q
+
+# 编译引导程序
+$(BUILD)/boot/%.bin: $(SRC)/boot/%.asm
+	$(shell mkdir -p $(dir $@))
+	nasm -f bin $< -o $@
+# 编译内核
+$(BUILD)/kernel/%.o: $(SRC)/kernel/%.asm
+	$(shell mkdir -p $(dir $@))
+	nasm -f elf32 $< -o $@
+# 编译内核
+$(BUILD)/kernel.bin: $(BUILD)/kernel/start.o
+	$(shell mkdir -p $(dir $@))
+	ld -m elf_i386 -static $^ -o $@ -Ttext $(ENTRYPOINT)
+# 编译系统
+$(BUILD)/system.bin: $(BUILD)/kernel.bin
+	objcopy -O binary $< $@
+
+# 生成内核符号表
+$(BUILD)/system.map: $(BUILD)/kernel.bin
+	nm $< | sort > $@
+
+# 生成镜像文件
+$(BUILD)/master.img: $(BUILD)/boot/boot.bin \
+	$(BUILD)/boot/loader.bin \
+	$(BUILD)/system.bin \
+	$(BUILD)/system.map
+
+	yes | bximage -q -hd=16 -func=create -sectsize=512 -imgmode=flat $@ 
+	dd if=$(BUILD)/boot/boot.bin of=$@ seek=0 bs=512 count=1 conv=notrunc
+	dd if=$(BUILD)/boot/loader.bin of=$@ seek=2 bs=512 count=4 conv=notrunc
+	dd if=$(BUILD)/system.bin of=$@ seek=10 bs=512 count=200 conv=notrunc
+clean:
+	rm -rf $(BUILD)
+
+test: $(BUILD)/master.img
+```
+
+/src/.bochsrc
+```bash
+ata0-master: type=disk, path="../build/master.img", mode=flat
+```
+
+简单的内核代码
+
+/src/kernel/start.asm
+```s
+[bits 32]
+
+global _start
+_start:
+                                          ; 打印字符 kernel
+    mov byte [0xb8000], 'k'
+    mov byte [0xb8002], 'e'
+    mov byte [0xb8004], 'r'
+    mov byte [0xb8006], 'n'
+    mov byte [0xb8008], 'e'
+    mov byte [0xb800a], 'l'
+
+    jmp $
+```
+
+loader 中加载内核，只需要把boot.asm 中的加载loader的代码复制到 loader.asm 中即可。注意参数的修改。我们需要把内核加载到 0x10000 的位置，内核放在 10 号扇区，共 200 个扇区，所以需要修改的参数如下：
+```s
+    mov edi, 0x10000                ; 读取的目标内存
+    mov ecx, 10                     ; 起始扇区
+    mov bl, 200                     ; 扇区数量
+
+    xchg bx,bx                      ; bochs 魔数断点
+    call read_disk
+
+
+    xchg bx,bx                      ; bochs 魔数断点
+
+    jmp code_selector:0x10000       ; 跳转到内核入口地址
+```
