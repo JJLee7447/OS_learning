@@ -108,11 +108,8 @@ protect_mode:
     mov edi, 0x10000                ; 读取的目标内存
     mov ecx, 10                     ; 起始扇区
     mov bl, 200                     ; 扇区数量
-    xchg bx,bx                      ; bochs 魔数断点
     call read_disk
 
-    xchg bx,bx                      ; bochs 魔数断点
-    xor ax,ax
     jmp code_selector:0x10000       ; 跳转到内核入口地址
     ud2                             ; 未定义指令，表示出错
 rd_disk_m_16:	   
