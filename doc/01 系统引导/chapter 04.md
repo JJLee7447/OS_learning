@@ -336,3 +336,7 @@ loader 中加载内核，只需要把boot.asm 中的加载loader的代码复制�
 
     jmp code_selector:0x10000       ; 跳转到内核入口地址
 ```
+
+
+
+
