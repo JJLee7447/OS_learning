@@ -70,3 +70,18 @@ bochs:$(BUILD)/master.img
 .PHONY:bochsgdb
 bochsgdb:$(BUILD)/master.img
 	bochs-gdb -q -f ../bochs/bochsrc.gdb
+
+.PHONY:qemu
+qemu:$(BUILD)/master.img
+	qemu-system-i386 \
+	-m 32M \
+	-boot c \
+	-hda $< \
+
+.PHONY:qemugdb
+qemugdb:$(BUILD)/master.img
+	qemu-system-i386 \
+	-s -S \
+	-m 32M \
+	-boot c \
+	-hda $< \
